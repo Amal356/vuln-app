@@ -1,14 +1,15 @@
-// ⚠️ TP10 : application VOLONTAIREMENT vulnérable. Ne jamais l'exposer hors du lab.
-// Chaque bloc marqué [VULN] doit être détecté par un outil puis corrigé.
+// TP10 : vuln-app CORRIGÉE après analyse Semgrep (partie 3).
+// Chaque bloc [FIX] remplace un bloc [VULN] de la version d'origine.
 const express = require("express");
-const { exec } = require("child_process");
+const { execFile } = require("child_process");
 const sqlite3 = require("sqlite3");
 const jwt = require("jsonwebtoken");
 const _ = require("lodash");
 const config = require("./config");
 
 const app = express();
-app.use(express.json());
+app.disable("x-powered-by");
+app.use(express.json({ limit: "10kb" }));
 
 const db = new sqlite3.Database(":memory:");
 db.serialize(() => {
@@ -16,31 +17,50 @@ db.serialize(() => {
   db.run("INSERT INTO users (name, role) VALUES ('alice', 'admin'), ('bob', 'user')");
 });
 
-// [VULN] Injection SQL : la valeur de l'utilisateur est concaténée dans la requête.
+/** Échappe les caractères HTML spéciaux (protection XSS). */
+function escapeHtml(value) {
+  const map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+  return String(value).replace(/[&<>"']/g, (c) => map[c]);
+}
+
+// [FIX] Injection SQL : requête PARAMÉTRÉE, la valeur n'est jamais concaténée au SQL.
+//       L'erreur SQL n'est plus renvoyée au client.
 app.get("/users", (req, res) => {
-  const sql = "SELECT id, name FROM users WHERE name = '" + req.query.name + "'";
-  db.all(sql, (err, rows) => (err ? res.status(500).send(err.message) : res.json(rows)));
+  const name = String(req.query.name ?? "");
+  db.all("SELECT id, name FROM users WHERE name = ?", [name], (err, rows) =>
+    err ? res.status(500).json({ error: "INTERNAL_ERROR" }) : res.json(rows)
+  );
 });
 
-// [VULN] Injection de commande : l'entrée est passée à un shell.
+// [FIX] Injection de commande : execFile (pas de shell) + liste blanche stricte du nom d'hôte.
+const HOSTNAME = /^[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}$/; // pas d'espace, de ; | & $ ` ni de "-" initial
 app.get("/ping", (req, res) => {
-  exec("ping -c 1 " + req.query.host, (err, stdout) => res.type("text").send(stdout || String(err)));
+  const host = String(req.query.host ?? "");
+  if (!HOSTNAME.test(host)) return res.status(400).json({ error: "INVALID_HOST" });
+  execFile("ping", ["-c", "1", host], { timeout: 5000 }, (err, stdout) =>
+    res.type("text").send(err ? "ping impossible" : stdout)
+  );
 });
 
-// [VULN] XSS réfléchi : l'entrée est renvoyée dans du HTML sans échappement.
+// [FIX] XSS réfléchi : l'entrée est échappée avant d'être insérée dans le HTML.
 app.get("/hello", (req, res) => {
-  res.send("<h1>Bonjour " + req.query.name + "</h1>");
+  const name = escapeHtml(req.query.name ?? "");
+  // nosemgrep: javascript.express.security.audit.xss.direct-response-write.direct-response-write
+  res.type("html").send(`<h1>Bonjour ${name}</h1>`); // valeur échappée par escapeHtml() ci-dessus
 });
 
-// [VULN] Prototype pollution via une version vulnérable de lodash (merge récursif d'un objet client).
+// [FIX] Prototype pollution : on ne fusionne plus l'objet client, on ne garde que des champs autorisés
+//       (lodash est aussi mis à jour en 4.17.21 dans la partie 4).
 app.post("/settings", (req, res) => {
-  const settings = _.merge({}, req.body);
+  const settings = _.pick(req.body ?? {}, ["theme", "lang"]);
   res.json(settings);
 });
 
-// [VULN] Jeton signé avec un secret codé en dur, sans expiration.
+// [FIX] JWT : secret lu dans l'environnement (config.js), algorithme imposé, expiration courte.
 app.post("/login", (req, res) => {
-  const token = jwt.sign({ user: req.body.user, role: "user" }, config.jwt_secret);
+  const user = String(req.body?.user ?? "");
+  if (!/^[a-zA-Z0-9_.-]{1,64}$/.test(user)) return res.status(400).json({ error: "INVALID_USER" });
+  const token = jwt.sign({ user, role: "user" }, config.jwt_secret, { algorithm: "HS256", expiresIn: "15m" });
   res.json({ token });
 });
 
