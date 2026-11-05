@@ -2,6 +2,6 @@
 # Installation : pipx install pre-commit && pre-commit install
 repos:
   - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.24.0 # TODO : remplacer par la dernière version publiée (pre-commit autoupdate)
+    rev: v8.30.0
     hooks:
       - id: gitleaks
