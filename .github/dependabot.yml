@@ -1,10 +1,14 @@
 # TP10 partie 5 : Dependabot (mises à jour de version hebdomadaires)
+# cooldown : attendre 7 jours après la publication d'une version avant de la proposer
+# (une version malveillante publiée sur un registre est en général retirée dans ce délai).
 version: 2
 updates:
   - package-ecosystem: npm
     directory: "/"
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     labels: [dependencies, security]
 
@@ -12,10 +16,14 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     labels: [dependencies, ci]
 
   - package-ecosystem: docker
     directory: "/"
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     labels: [dependencies, docker]
