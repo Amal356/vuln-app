@@ -1,4 +1,7 @@
-# TP10 partie 5 : workflow de sécurité à compléter.
+# TP10 partie 5 : workflow de sécurité (secrets, SAST, dépendances, image).
+# - permissions minimales : lecture seule par défaut, écriture SARIF seulement là où c'est nécessaire
+# - Actions tierces épinglées par SHA de commit complet (version en commentaire, mise à jour par Dependabot)
+# - images des scanners épinglées par version
 name: security
 
 on:
@@ -6,37 +9,77 @@ on:
   push:
     branches: [main]
 
-# TODO : permissions minimales au niveau du workflow (contents: read)
-#        puis security-events: write uniquement pour les jobs qui publient du SARIF
+permissions:
+  contents: read
 
 jobs:
   secrets:
     runs-on: ubuntu-latest
     steps:
-      # TODO : épingler chaque Action tierce par SHA de commit complet, avec la version en commentaire
-      #        ex. uses: actions/checkout@<sha40> # v7.0.0
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # historique complet : Gitleaks analyse tous les commits
-      # TODO : lancer Gitleaks (image ghcr.io/gitleaks/gitleaks ou action gitleaks/gitleaks-action)
+      - name: Gitleaks (historique complet)
+        run: |
+          docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/repo" \
+            ghcr.io/gitleaks/gitleaks:v8.30.1 git /repo --redact --verbose
 
   sast:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # publication du SARIF dans l'onglet Security
     steps:
-      - uses: actions/checkout@v7
-      # TODO : Semgrep (conteneur semgrep/semgrep) avec --config p/javascript --config p/owasp-top-ten
-      #        --error pour faire échouer le job, --sarif pour publier dans l'onglet Security
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Semgrep (p/javascript + p/owasp-top-ten)
+        run: |
+          docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/src" -w /src \
+            semgrep/semgrep:1.183.0 semgrep scan \
+            --config p/javascript --config p/owasp-top-ten \
+            --sarif --output semgrep.sarif --error .
+      - name: Publier le SARIF Semgrep
+        if: always() # même si Semgrep a trouvé des failles
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
 
   dependencies:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      # TODO : npm ci puis npm audit --audit-level=high
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: npm ci (sans scripts d'installation)
+        run: npm ci --ignore-scripts
+      - name: npm audit (échec à partir de high)
+        run: npm audit --audit-level=high --omit=dev
 
   image:
     runs-on: ubuntu-latest
     needs: [secrets, sast, dependencies]
+    permissions:
+      contents: read
+      security-events: write
     steps:
-      - uses: actions/checkout@v7
-      # TODO : docker build puis Trivy image --severity CRITICAL --exit-code 1 --ignore-unfixed
-      # TODO : Trivy config sur le Dockerfile
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build de l'image
+        run: docker build -t vuln-app:${{ github.sha }} .
+      - name: Trivy image (bloquant sur CRITICAL corrigeable)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:0.76.2 image --severity CRITICAL --exit-code 1 --ignore-unfixed \
+            vuln-app:${{ github.sha }}
+      - name: Trivy config (Dockerfile)
+        run: |
+          docker run --rm -v "$PWD:/src" aquasec/trivy:0.76.2 config \
+            --severity HIGH,CRITICAL --exit-code 1 /src
+      - name: Trivy image (rapport SARIF complet)
+        if: always()
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/out" \
+            aquasec/trivy:0.76.2 image --format sarif --output /out/trivy.sarif vuln-app:${{ github.sha }}
+      - name: Publier le SARIF Trivy
+        if: always()
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: trivy.sarif
+          category: trivy
