@@ -46,7 +46,7 @@ app.get("/ping", (req, res) => {
 app.get("/hello", (req, res) => {
   const name = escapeHtml(req.query.name ?? "");
   // nosemgrep: javascript.express.security.audit.xss.direct-response-write.direct-response-write
-  res.type("html").send(`<h1>Bonjour ${name}</h1>`); // valeur échappée par escapeHtml() ci-dessus
+  res.type("html").send(`<h1>Bonjour ${name}</h1>`); // nosemgrep: javascript.express.security.injection.raw-html-format.raw-html-format -- valeur échappée par escapeHtml()
 });
 
 // [FIX] Prototype pollution : on ne fusionne plus l'objet client, on ne garde que des champs autorisés
