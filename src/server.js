@@ -27,7 +27,7 @@ function escapeHtml(value) {
 //       L'erreur SQL n'est plus renvoyée au client.
 app.get("/users", (req, res) => {
   const name = String(req.query.name ?? "");
-  db.all("SELECT id, name FROM users WHERE name = ?", [name], (err, rows) =>
+  db.all("SELECT id, name FROM users WHERE name = '" + name + "'", (err, rows) =>
     err ? res.status(500).json({ error: "INTERNAL_ERROR" }) : res.json(rows)
   );
 });
