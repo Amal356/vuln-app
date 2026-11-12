@@ -2,14 +2,14 @@
 # Dockerfile corrigé : image récente, multi-stage, dépendances de prod uniquement, non-root, sans secret.
 
 # ---------- Étape 1 : dépendances (outils de compilation seulement ici) ----------
-FROM node:24-alpine AS deps
+FROM node:25-alpine AS deps
 WORKDIR /app
 RUN apk add --no-cache python3 make g++
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 # ---------- Étape 2 : runtime minimal ----------
-FROM node:24-alpine
+FROM node:25-alpine
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=deps --chown=node:node /app/node_modules ./node_modules
